@@ -1,27 +1,14 @@
----
-title: Levee Detection App
-emoji: "robot"
-colorFrom: blue
-colorTo: cyan
-sdk: docker
-app_port: 7860
----
+# Levee Detection App
 
-# Levee Detection App (FastAPI + React)
+FastAPI + React app for levee defect detection with Human-in-the-Loop (HITL) annotation support.
 
-Self-contained production-style app with:
+## Structure
 
-- `backend/`: FastAPI inference API
-- `frontend/`: React + Vite UI
-- `Dockerfile`: single-container deploy (serves UI + API together)
-- `docker-compose.yml`: optional split local stack
+- `backend/` - FastAPI inference API
+- `frontend/` - React UI
+- `Dockerfile` - one-container deploy (UI + API)
 
-Model files are included at project root:
-
-- `sandboil_best_model.h5`
-- `seepage_best_model.h5`
-
-## Local Development
+## Run Locally
 
 Backend:
 
@@ -43,9 +30,9 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-## Single-Container Run (Prod-Like)
+## Run with Docker (Recommended)
 
-From this folder:
+From `levee-detection-app/`:
 
 ```bash
 docker build -t levee-detection-app .
@@ -54,33 +41,15 @@ docker run --rm -p 7860:7860 levee-detection-app
 
 Open `http://localhost:7860`.
 
-## GitHub Push (Only This Folder)
+## Deploy
 
-From `levee-detection-app/`:
+Use GitHub + Hugging Face Spaces (free Docker hosting):
 
-```bash
-git init
-git add .
-git commit -m "Initial levee detection app"
-git branch -M main
-git remote add origin https://github.com/<your-username>/levee-detection-app.git
-git push -u origin main
-```
+1. Push this folder to GitHub.
+2. Create a Hugging Face Space with `SDK = Docker`.
+3. Connect the GitHub repo and deploy.
 
-## Free Deployment (GitHub-Connected)
-
-Recommended: Hugging Face Spaces (Docker)
-
-1. Push this folder to a GitHub repo.
-2. In Hugging Face, create a new Space:
-3. `SDK`: `Docker`
-4. Connect/select your GitHub repo.
-5. Keep `app_port` as `7860`.
-6. Deploy.
-
-Your app will be available at:
-
-`https://<your-space-name>.hf.space`
+Live URL format: `https://<space-name>.hf.space`
 
 ## API Endpoints
 

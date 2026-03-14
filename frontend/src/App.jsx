@@ -764,7 +764,7 @@ export default function App() {
           </section>
 
           <section className="panel result">
-            <h2>Output + HITL</h2>
+            <h2>Detection Output</h2>
 
             {outputImage ? (
               <>
@@ -797,15 +797,15 @@ export default function App() {
                       </svg>
                     )}
                   </div>
-                  <p className="hint">{hitlEnabled ? 'Click the image to place polygon points. Click anywhere on page to spawn network nodes.' : 'Enable HITL to begin manual correction.'}</p>
+                  <p className="hint">{hitlEnabled ? 'Click the image to place polygon points. Click anywhere on page to spawn network nodes.' : 'Enable Human-in-the-Loop (HITL) to begin manual correction.'}</p>
                 </div>
 
                 <div className="hitl-box">
-                  <h3>HITL Re-annotation</h3>
+                  <h3>Human-in-the-Loop (HITL) Re-annotation</h3>
                   <div className="check-grid">
                     <label className="check-item">
                       <input type="checkbox" checked={hitlEnabled} onChange={(e) => setHitlEnabled(e.target.checked)} />
-                      <span>Enable HITL Re-annotation</span>
+                      <span>Enable Human-in-the-Loop (HITL) Re-annotation</span>
                     </label>
                   </div>
 
