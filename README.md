@@ -51,6 +51,10 @@ Use GitHub + Hugging Face Spaces (free Docker hosting):
 
 Live URL format: `https://<space-name>.hf.space`
 
+Current live demo:
+
+`https://huggingface.co/spaces/padam5699/levee-detection-app`
+
 ## API Endpoints
 
 - `GET /health`
