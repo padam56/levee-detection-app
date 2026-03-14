@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: levee-api
+    environment:
+      - MODEL_ROOT=/models
+    volumes:
+      - ../:/models:ro
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: levee-web
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
