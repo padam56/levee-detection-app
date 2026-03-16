@@ -257,6 +257,33 @@ button:disabled { opacity: 0.7; cursor: default; }
   border: 1px solid #3a6579;
 }
 
+.result-video {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #3a6579;
+  background: #051521;
+}
+
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid #2b8cb5;
+  background: linear-gradient(90deg, #0f766e, #0e7490);
+  color: #d4f0fb;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.download-btn:hover {
+  filter: brightness(1.08);
+}
+
 .preview-block {
   margin-bottom: 14px;
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -8,10 +9,11 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .annotation_store import list_annotations, save_annotation
-from .inference import infer_image
+from .inference import infer_image, infer_video
 from .model_store import get_available_models
 from .schemas import (
     AnnotationCreateRequest,
@@ -112,6 +114,63 @@ async def infer_image_endpoint(
             preprocessing_settings=preprocess,
         )
         return InferResponse(**result)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/infer/video")
+async def infer_video_endpoint(
+    video: UploadFile = File(...),
+    model_type: str = Form("sandboil"),
+    threshold: float = Form(0.5),
+    visualization: str = Form("overlay"),
+    overlay_intensity: float = Form(0.45),
+    selected_models: str = Form("[]"),
+    thresholds: str = Form("{}"),
+    threshold_types: str = Form("{}"),
+    preprocessing_settings: str = Form("{}"),
+    distance_threshold: int = Form(20),
+) -> StreamingResponse:
+    try:
+        video_bytes = await video.read()
+
+        selected = json.loads(selected_models)
+        if not selected:
+            selected = [model_type]
+
+        thresholds_map = json.loads(thresholds)
+        threshold_types_map = json.loads(threshold_types)
+        preprocess = json.loads(preprocessing_settings)
+
+        if model_type not in thresholds_map:
+            thresholds_map[model_type] = threshold
+        if model_type not in threshold_types_map:
+            threshold_types_map[model_type] = "Manual"
+
+        result = infer_video(
+            video_bytes=video_bytes,
+            selected_models=selected,
+            thresholds=thresholds_map,
+            threshold_types=threshold_types_map,
+            visualization=visualization,
+            overlay_intensity=overlay_intensity,
+            distance_threshold=distance_threshold,
+            preprocessing_settings=preprocess,
+        )
+
+        headers = {
+            "X-Model-Stats": json.dumps(result["model_stats"]),
+            "X-Applied-Settings": json.dumps(result["applied_settings"]),
+            "X-Frame-Count": str(result["frame_count"]),
+            "X-Fps": str(result["fps"]),
+            "Content-Disposition": "inline; filename=processed_output.mp4",
+        }
+
+        return StreamingResponse(
+            BytesIO(result["video_bytes"]),
+            media_type="video/mp4",
+            headers=headers,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

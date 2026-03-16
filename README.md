@@ -60,5 +60,6 @@ Current live demo:
 - `GET /health`
 - `GET /models`
 - `POST /infer/image`
+- `POST /infer/video`
 - `GET /annotations`
 - `POST /annotations`

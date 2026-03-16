@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-const DEFAULT_API = 'http://localhost:8000'
+const BROWSER_ORIGIN = typeof window !== 'undefined' ? window.location.origin : ''
+const DEFAULT_API = import.meta.env.DEV ? 'http://localhost:8000' : BROWSER_ORIGIN
 const SETTINGS_KEY = 'levee-ui-settings-v1'
 const TARGET_CATALOG = [
   { id: 'sandboil', label: 'Sandboil' },
@@ -19,6 +20,10 @@ function defaultThreshold(model) {
 
 function toPointString(points) {
   return points.map((p) => `${p.x},${p.y}`).join(' ')
+}
+
+function isLocalhostApi(base) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test((base || '').trim())
 }
 
 function InteractiveNetworkBackground() {
@@ -198,9 +203,12 @@ export default function App() {
   const [flipHorizontal, setFlipHorizontal] = useState(false)
   const [flipVertical, setFlipVertical] = useState(false)
   const [rotateAngle, setRotateAngle] = useState(0)
+  const [inputMode, setInputMode] = useState('image')
 
   const [file, setFile] = useState(null)
   const [result, setResult] = useState(null)
+  const [videoResultUrl, setVideoResultUrl] = useState('')
+  const [videoMeta, setVideoMeta] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [lastInferenceMs, setLastInferenceMs] = useState(null)
@@ -267,6 +275,13 @@ export default function App() {
     setLastInferenceMs(null)
     setLastFromCache(false)
     setInferenceCount(0)
+    setResult(null)
+    setVideoMeta(null)
+    setAnnotationPoints([])
+    if (videoResultUrl) {
+      URL.revokeObjectURL(videoResultUrl)
+      setVideoResultUrl('')
+    }
   }
 
   useEffect(() => {
@@ -275,13 +290,27 @@ export default function App() {
       if (!raw) return
       const saved = JSON.parse(raw)
 
-      if (typeof saved.apiBase === 'string') setApiBase(saved.apiBase)
+      if (typeof saved.apiBase === 'string') {
+        const normalized = saved.apiBase.trim()
+        const runningOnRemoteHost =
+          typeof window !== 'undefined' &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1'
+
+        // Auto-heal stale localhost API settings when app is opened on a remote host.
+        if (runningOnRemoteHost && isLocalhostApi(normalized)) {
+          setApiBase(BROWSER_ORIGIN)
+        } else {
+          setApiBase(normalized)
+        }
+      }
       if (typeof saved.overlayIntensity === 'number') setOverlayIntensity(saved.overlayIntensity)
       if (typeof saved.distanceThreshold === 'number') setDistanceThreshold(saved.distanceThreshold)
       if (typeof saved.visualization === 'string') setVisualization(saved.visualization)
       if (typeof saved.showPreprocessPreview === 'boolean') setShowPreprocessPreview(saved.showPreprocessPreview)
       if (typeof saved.autoRun === 'boolean') setAutoRun(saved.autoRun)
       if (typeof saved.activeTab === 'string') setActiveTab(saved.activeTab)
+      if (typeof saved.inputMode === 'string') setInputMode(saved.inputMode)
 
       if (typeof saved.resolutionFactor === 'number') setResolutionFactor(saved.resolutionFactor)
       if (typeof saved.brightnessFactor === 'number') setBrightnessFactor(saved.brightnessFactor)
@@ -305,6 +334,7 @@ export default function App() {
       showPreprocessPreview,
       autoRun,
       activeTab,
+      inputMode,
       resolutionFactor,
       brightnessFactor,
       contrastFactor,
@@ -323,6 +353,7 @@ export default function App() {
     showPreprocessPreview,
     autoRun,
     activeTab,
+    inputMode,
     resolutionFactor,
     brightnessFactor,
     contrastFactor,
@@ -336,7 +367,35 @@ export default function App() {
   useEffect(() => {
     async function loadModels() {
       try {
-        const resp = await fetch(`${apiBase}/models`)
+        const primaryBase = (apiBase || '').trim()
+        const canFallbackToOrigin =
+          Boolean(BROWSER_ORIGIN) &&
+          BROWSER_ORIGIN !== primaryBase &&
+          (import.meta.env.PROD || isLocalhostApi(primaryBase))
+
+        let resp
+        try {
+          resp = await fetch(`${primaryBase}/models`)
+        } catch (primaryErr) {
+          if (!canFallbackToOrigin) {
+            throw primaryErr
+          }
+          const fallbackResp = await fetch(`${BROWSER_ORIGIN}/models`)
+          if (!fallbackResp.ok) {
+            throw new Error(`HTTP ${fallbackResp.status}`)
+          }
+          setApiBase(BROWSER_ORIGIN)
+          resp = fallbackResp
+        }
+
+        if (!resp.ok && canFallbackToOrigin) {
+          const fallbackResp = await fetch(`${BROWSER_ORIGIN}/models`)
+          if (fallbackResp.ok) {
+            setApiBase(BROWSER_ORIGIN)
+            resp = fallbackResp
+          }
+        }
+
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
         const available = data.available_models || []
@@ -407,9 +466,17 @@ export default function App() {
     return `data:image/png;base64,${result.preprocessed_base64}`
   }, [result])
 
+  useEffect(() => {
+    return () => {
+      if (videoResultUrl) {
+        URL.revokeObjectURL(videoResultUrl)
+      }
+    }
+  }, [videoResultUrl])
+
   async function runInference() {
     if (!file) {
-      setError('Please choose an image first.')
+      setError(`Please choose a ${inputMode} first.`)
       return
     }
     if (!selectedModels.length) {
@@ -423,6 +490,7 @@ export default function App() {
 
     try {
       const payloadSnapshot = {
+        inputMode,
         apiBase,
         selectedModels,
         thresholds,
@@ -448,7 +516,16 @@ export default function App() {
       }
       const cacheKey = JSON.stringify(payloadSnapshot)
       if (inferenceCacheRef.current.has(cacheKey)) {
-        setResult(inferenceCacheRef.current.get(cacheKey))
+        const cached = inferenceCacheRef.current.get(cacheKey)
+        setResult(cached.result || null)
+        setVideoMeta(cached.videoMeta || null)
+        if (videoResultUrl) {
+          URL.revokeObjectURL(videoResultUrl)
+          setVideoResultUrl('')
+        }
+        if (cached.videoBlob) {
+          setVideoResultUrl(URL.createObjectURL(cached.videoBlob))
+        }
         setLastFromCache(true)
         setLastInferenceMs(0)
         setInferenceCount((v) => v + 1)
@@ -464,7 +541,7 @@ export default function App() {
       const startedAt = performance.now()
 
       const formData = new FormData()
-      formData.append('image', file)
+      formData.append(inputMode, file)
       formData.append('model_type', selectedModels[0])
       formData.append('selected_models', JSON.stringify(selectedModels))
       formData.append('thresholds', JSON.stringify(thresholds))
@@ -486,22 +563,84 @@ export default function App() {
         }),
       )
 
-      const resp = await fetch(`${apiBase}/infer/image`, {
+      const endpoint = inputMode === 'video' ? 'video' : 'image'
+      const resp = await fetch(`${apiBase}/infer/${endpoint}`, {
         method: 'POST',
         body: formData,
         signal: controller.signal,
       })
 
-      const data = await resp.json()
       if (!resp.ok) {
-        throw new Error(data.detail || `HTTP ${resp.status}`)
+        let detail = `HTTP ${resp.status}`
+        try {
+          const data = await resp.json()
+          detail = data.detail || detail
+        } catch {
+          // non-json error response
+        }
+        throw new Error(detail)
       }
 
-      setResult(data)
+      if (inputMode === 'video') {
+        const blob = await resp.blob()
+        const modelStatsHeader = resp.headers.get('x-model-stats')
+        const appliedSettingsHeader = resp.headers.get('x-applied-settings')
+        const frameCountHeader = resp.headers.get('x-frame-count')
+        const fpsHeader = resp.headers.get('x-fps')
+
+        let modelStats = {}
+        let appliedSettings = {}
+        if (modelStatsHeader) {
+          try {
+            modelStats = JSON.parse(modelStatsHeader)
+          } catch {
+            modelStats = {}
+          }
+        }
+        if (appliedSettingsHeader) {
+          try {
+            appliedSettings = JSON.parse(appliedSettingsHeader)
+          } catch {
+            appliedSettings = {}
+          }
+        }
+
+        const payload = {
+          result: {
+            model_stats: modelStats,
+            applied_settings: appliedSettings,
+          },
+          videoBlob: blob,
+          videoMeta: {
+            frameCount: Number(frameCountHeader || 0),
+            fps: Number(fpsHeader || 0),
+          },
+        }
+
+        setResult(payload.result)
+        setVideoMeta(payload.videoMeta)
+
+        if (videoResultUrl) {
+          URL.revokeObjectURL(videoResultUrl)
+        }
+        setVideoResultUrl(URL.createObjectURL(blob))
+
+        inferenceCacheRef.current.set(cacheKey, payload)
+      } else {
+        const data = await resp.json()
+        setResult(data)
+        setVideoMeta(null)
+        if (videoResultUrl) {
+          URL.revokeObjectURL(videoResultUrl)
+          setVideoResultUrl('')
+        }
+
+        inferenceCacheRef.current.set(cacheKey, { result: data, videoBlob: null, videoMeta: null })
+      }
+
       setLastInferenceMs(Math.round(performance.now() - startedAt))
       setInferenceCount((v) => v + 1)
 
-      inferenceCacheRef.current.set(cacheKey, data)
       if (inferenceCacheRef.current.size > 30) {
         const oldest = inferenceCacheRef.current.keys().next().value
         inferenceCacheRef.current.delete(oldest)
@@ -516,7 +655,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!autoRun || !file || !selectedModels.length) {
+    if (!autoRun || inputMode !== 'image' || !file || !selectedModels.length) {
       return
     }
 
@@ -532,6 +671,7 @@ export default function App() {
     }
   }, [
     autoRun,
+    inputMode,
     file,
     apiBase,
     selectedModels,
@@ -551,7 +691,7 @@ export default function App() {
   ])
 
   function onImageClick(event) {
-    if (!outputImgRef.current || !hitlEnabled) return
+    if (inputMode !== 'image' || !outputImgRef.current || !hitlEnabled) return
 
     const rect = outputImgRef.current.getBoundingClientRect()
     const relX = event.clientX - rect.left
@@ -601,6 +741,8 @@ export default function App() {
       setAnnotationMessage(`Save failed: ${err.message}`)
     }
   }
+
+  const hasOutput = inputMode === 'video' ? Boolean(videoResultUrl) : Boolean(outputImage)
 
   return (
     <>
@@ -737,15 +879,46 @@ export default function App() {
 
               {activeTab === 'run' && (
                 <>
-                  <label>Image</label>
-                  <input type="file" accept="image/png,image/jpeg" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+                  <label>Input Type</label>
+                  <select
+                    value={inputMode}
+                    onChange={(e) => {
+                      setInputMode(e.target.value)
+                      setFile(null)
+                      setResult(null)
+                      setVideoMeta(null)
+                      setAnnotationPoints([])
+                      if (videoResultUrl) {
+                        URL.revokeObjectURL(videoResultUrl)
+                        setVideoResultUrl('')
+                      }
+                    }}
+                  >
+                    <option value="image">Image Segmentation</option>
+                    <option value="video">Video Segmentation</option>
+                  </select>
+
+                  <label>{inputMode === 'video' ? 'Video' : 'Image'}</label>
+                  <input
+                    type="file"
+                    accept={inputMode === 'video' ? 'video/mp4,video/quicktime,video/x-matroska' : 'image/png,image/jpeg'}
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  />
 
                   <div className="check-grid">
-                    <label className="check-item"><input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} /><span>Auto-run Inference</span></label>
+                    <label className="check-item">
+                      <input
+                        type="checkbox"
+                        checked={autoRun}
+                        disabled={inputMode === 'video'}
+                        onChange={(e) => setAutoRun(e.target.checked)}
+                      />
+                      <span>{inputMode === 'video' ? 'Auto-run disabled for video' : 'Auto-run Inference'}</span>
+                    </label>
                   </div>
 
                   <button disabled={loading} onClick={runInference}>
-                    {loading ? 'Processing...' : 'Run Inference Now'}
+                    {loading ? 'Processing...' : inputMode === 'video' ? 'Run Video Segmentation' : 'Run Inference Now'}
                   </button>
 
                   <div className="run-actions">
@@ -766,9 +939,9 @@ export default function App() {
           <section className="panel result">
             <h2>Detection Output</h2>
 
-            {outputImage ? (
+            {hasOutput ? (
               <>
-                {showPreprocessPreview && preprocessedImage && (
+                {inputMode === 'image' && showPreprocessPreview && preprocessedImage && (
                   <div className="preview-block">
                     <h3>After Preprocessing</h3>
                     <img src={preprocessedImage} alt="Preprocessed" />
@@ -777,55 +950,71 @@ export default function App() {
 
                 <div className="preview-block">
                   <h3>Detection Result</h3>
-                  <div className={`annotation-stage ${hitlEnabled ? 'active' : ''}`} onClick={onImageClick}>
-                    <img ref={outputImgRef} src={outputImage} alt="Processed output" />
-                    {hitlEnabled && outputImgRef.current && (
-                      <svg
-                        className="annotation-overlay"
-                        viewBox={`0 0 ${outputImgRef.current.naturalWidth || 1} ${outputImgRef.current.naturalHeight || 1}`}
-                        preserveAspectRatio="none"
-                      >
-                        {annotationPoints.length >= 2 && (
-                          <polyline points={toPointString(annotationPoints)} className="annotation-polyline" />
+                  {inputMode === 'video' ? (
+                    <>
+                      <video className="result-video" src={videoResultUrl} controls preload="metadata" />
+                      <div className="run-actions">
+                        <a className="download-btn" href={videoResultUrl} download="levee-segmentation-output.mp4">Download Processed Video</a>
+                      </div>
+                      {videoMeta && (
+                        <p className="hint">Frames processed: {videoMeta.frameCount || 0} | FPS: {videoMeta.fps || 0}</p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className={`annotation-stage ${hitlEnabled ? 'active' : ''}`} onClick={onImageClick}>
+                        <img ref={outputImgRef} src={outputImage} alt="Processed output" />
+                        {hitlEnabled && outputImgRef.current && (
+                          <svg
+                            className="annotation-overlay"
+                            viewBox={`0 0 ${outputImgRef.current.naturalWidth || 1} ${outputImgRef.current.naturalHeight || 1}`}
+                            preserveAspectRatio="none"
+                          >
+                            {annotationPoints.length >= 2 && (
+                              <polyline points={toPointString(annotationPoints)} className="annotation-polyline" />
+                            )}
+                            {annotationPoints.length >= 3 && (
+                              <polygon points={toPointString(annotationPoints)} className="annotation-polygon" />
+                            )}
+                            {annotationPoints.map((p, idx) => (
+                              <circle key={`${p.x}-${p.y}-${idx}`} cx={p.x} cy={p.y} r="4" className="annotation-point" />
+                            ))}
+                          </svg>
                         )}
-                        {annotationPoints.length >= 3 && (
-                          <polygon points={toPointString(annotationPoints)} className="annotation-polygon" />
-                        )}
-                        {annotationPoints.map((p, idx) => (
-                          <circle key={`${p.x}-${p.y}-${idx}`} cx={p.x} cy={p.y} r="4" className="annotation-point" />
-                        ))}
-                      </svg>
-                    )}
-                  </div>
-                  <p className="hint">{hitlEnabled ? 'Click the image to place polygon points. Click anywhere on page to spawn network nodes.' : 'Enable Human-in-the-Loop (HITL) to begin manual correction.'}</p>
+                      </div>
+                      <p className="hint">{hitlEnabled ? 'Click the image to place polygon points. Click anywhere on page to spawn network nodes.' : 'Enable Human-in-the-Loop (HITL) to begin manual correction.'}</p>
+                    </>
+                  )}
                 </div>
 
-                <div className="hitl-box">
-                  <h3>Human-in-the-Loop (HITL) Re-annotation</h3>
-                  <div className="check-grid">
-                    <label className="check-item">
-                      <input type="checkbox" checked={hitlEnabled} onChange={(e) => setHitlEnabled(e.target.checked)} />
-                      <span>Enable Human-in-the-Loop (HITL) Re-annotation</span>
-                    </label>
+                {inputMode === 'image' && (
+                  <div className="hitl-box">
+                    <h3>Human-in-the-Loop (HITL) Re-annotation</h3>
+                    <div className="check-grid">
+                      <label className="check-item">
+                        <input type="checkbox" checked={hitlEnabled} onChange={(e) => setHitlEnabled(e.target.checked)} />
+                        <span>Enable Human-in-the-Loop (HITL) Re-annotation</span>
+                      </label>
+                    </div>
+
+                    <label>Target Model</label>
+                    <select value={annotationTarget} onChange={(e) => setAnnotationTarget(e.target.value)}>
+                      {selectedModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+
+                    <label>Notes</label>
+                    <input value={annotationNotes} onChange={(e) => setAnnotationNotes(e.target.value)} placeholder="Optional notes" />
+
+                    <div className="hitl-actions">
+                      <button onClick={() => setAnnotationPoints((prev) => prev.slice(0, -1))}>Undo Point</button>
+                      <button onClick={() => setAnnotationPoints([])}>Clear Polygon</button>
+                      <button onClick={saveAnnotation}>Save Annotation</button>
+                    </div>
+                    {annotationMessage && <p className="hint">{annotationMessage}</p>}
                   </div>
-
-                  <label>Target Model</label>
-                  <select value={annotationTarget} onChange={(e) => setAnnotationTarget(e.target.value)}>
-                    {selectedModels.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-
-                  <label>Notes</label>
-                  <input value={annotationNotes} onChange={(e) => setAnnotationNotes(e.target.value)} placeholder="Optional notes" />
-
-                  <div className="hitl-actions">
-                    <button onClick={() => setAnnotationPoints((prev) => prev.slice(0, -1))}>Undo Point</button>
-                    <button onClick={() => setAnnotationPoints([])}>Clear Polygon</button>
-                    <button onClick={saveAnnotation}>Save Annotation</button>
-                  </div>
-                  {annotationMessage && <p className="hint">{annotationMessage}</p>}
-                </div>
+                )}
 
                 <h3>Per-model Stats</h3>
                 <div className="stats-grid">
@@ -840,24 +1029,28 @@ export default function App() {
                   ))}
                 </div>
 
-                <h3>Latest Saved Annotations</h3>
-                <div className="stats-grid">
-                  {savedAnnotations.length ? (
-                    savedAnnotations.slice().reverse().slice(0, 6).map((item) => (
-                      <div className="stat-card" key={item.id}>
-                        <strong>{item.target_model}</strong>
-                        <div>ID: {item.id.slice(0, 8)}...</div>
-                        <div>Points: {item.points.length}</div>
-                        <div>{new Date(item.created_at).toLocaleString()}</div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="stat-card"><div>No annotations yet.</div></div>
-                  )}
-                </div>
+                {inputMode === 'image' && (
+                  <>
+                    <h3>Latest Saved Annotations</h3>
+                    <div className="stats-grid">
+                      {savedAnnotations.length ? (
+                        savedAnnotations.slice().reverse().slice(0, 6).map((item) => (
+                          <div className="stat-card" key={item.id}>
+                            <strong>{item.target_model}</strong>
+                            <div>ID: {item.id.slice(0, 8)}...</div>
+                            <div>Points: {item.points.length}</div>
+                            <div>{new Date(item.created_at).toLocaleString()}</div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="stat-card"><div>No annotations yet.</div></div>
+                      )}
+                    </div>
+                  </>
+                )}
               </>
             ) : (
-              <p className="placeholder">Upload an image and run inference.</p>
+              <p className="placeholder">Upload a {inputMode} and run segmentation.</p>
             )}
           </section>
         </main>

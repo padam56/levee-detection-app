@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import tempfile
 from typing import Any
 
 import cv2
@@ -222,6 +224,35 @@ def infer_image(
 ) -> dict[str, Any]:
     image_bgr = decode_image(image_bytes)
     settings = sanitize_preprocessing(preprocessing_settings)
+    rendered, transformed, model_stats = render_inference_frame(
+        image_bgr=image_bgr,
+        settings=settings,
+        selected_models=selected_models,
+        thresholds=thresholds,
+        threshold_types=threshold_types,
+        visualization=visualization,
+        overlay_intensity=overlay_intensity,
+        distance_threshold=distance_threshold,
+    )
+
+    return {
+        "image_base64": encode_png_base64(rendered),
+        "preprocessed_base64": encode_png_base64(transformed),
+        "model_stats": model_stats,
+        "applied_settings": settings,
+    }
+
+
+def render_inference_frame(
+    image_bgr: np.ndarray,
+    settings: dict[str, Any],
+    selected_models: list[str],
+    thresholds: dict[str, float],
+    threshold_types: dict[str, str],
+    visualization: str,
+    overlay_intensity: float,
+    distance_threshold: int,
+) -> tuple[np.ndarray, np.ndarray, dict[str, dict[str, Any]]]:
     transformed = apply_base_transforms(image_bgr, settings)
 
     predictions: dict[str, np.ndarray] = {}
@@ -264,9 +295,117 @@ def infer_image(
         for model_type, mask in masks.items():
             rendered = draw_overlay(rendered, mask, model_type, overlay_intensity)
 
-    return {
-        "image_base64": encode_png_base64(rendered),
-        "preprocessed_base64": encode_png_base64(transformed),
-        "model_stats": model_stats,
-        "applied_settings": settings,
-    }
+    return rendered, transformed, model_stats
+
+
+def infer_video(
+    video_bytes: bytes,
+    selected_models: list[str],
+    thresholds: dict[str, float],
+    threshold_types: dict[str, str],
+    visualization: str,
+    overlay_intensity: float,
+    distance_threshold: int,
+    preprocessing_settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    settings = sanitize_preprocessing(preprocessing_settings)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as input_tmp:
+        input_tmp.write(video_bytes)
+        input_path = input_tmp.name
+
+    output_path = None
+    try:
+        capture = cv2.VideoCapture(input_path)
+        if not capture.isOpened():
+            raise ValueError("Could not open video")
+
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            fps = 20.0
+
+        frame_count = 0
+        writer = None
+
+        aggregate: dict[str, dict[str, Any]] = {
+            model_type: {
+                "threshold_mode": threshold_types.get(model_type, "Manual"),
+                "threshold_used_total": 0.0,
+                "coverage_pct_total": 0.0,
+                "positive_pixels_total": 0,
+                "frame_count": 0,
+            }
+            for model_type in selected_models
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as output_tmp:
+            output_path = output_tmp.name
+
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+
+            rendered, _, stats = render_inference_frame(
+                image_bgr=frame,
+                settings=settings,
+                selected_models=selected_models,
+                thresholds=thresholds,
+                threshold_types=threshold_types,
+                visualization=visualization,
+                overlay_intensity=overlay_intensity,
+                distance_threshold=distance_threshold,
+            )
+
+            if writer is None:
+                h, w = rendered.shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+                if not writer.isOpened():
+                    raise ValueError("Could not create output video")
+
+            writer.write(rendered)
+            frame_count += 1
+
+            for model_type, model_stats in stats.items():
+                item = aggregate[model_type]
+                item["threshold_used_total"] += float(model_stats["threshold_used"])
+                item["coverage_pct_total"] += float(model_stats["coverage_pct"])
+                item["positive_pixels_total"] += int(model_stats["positive_pixels"])
+                item["frame_count"] += 1
+
+        capture.release()
+        if writer is not None:
+            writer.release()
+
+        if frame_count == 0:
+            raise ValueError("Video has no readable frames")
+
+        model_stats: dict[str, dict[str, Any]] = {}
+        for model_type, item in aggregate.items():
+            n = max(1, int(item["frame_count"]))
+            model_stats[model_type] = {
+                "threshold_mode": item["threshold_mode"],
+                "threshold_used": round(float(item["threshold_used_total"]) / n, 4),
+                "coverage_pct": round(float(item["coverage_pct_total"]) / n, 4),
+                "positive_pixels": int(item["positive_pixels_total"]),
+            }
+
+        if output_path is None:
+            raise ValueError("Could not create output video")
+
+        with open(output_path, "rb") as f:
+            output_bytes = f.read()
+
+        return {
+            "video_bytes": output_bytes,
+            "model_stats": model_stats,
+            "applied_settings": settings,
+            "frame_count": frame_count,
+            "fps": round(float(fps), 2),
+        }
+    finally:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        if output_path and os.path.exists(output_path):
+            os.remove(output_path)
