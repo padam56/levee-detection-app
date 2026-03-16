@@ -743,25 +743,58 @@ export default function App() {
   }
 
   const hasOutput = inputMode === 'video' ? Boolean(videoResultUrl) : Boolean(outputImage)
+  const primaryModel = selectedModels[0] || 'none'
+  const lastRunLabel = lastInferenceMs === null ? 'No run yet' : `${lastInferenceMs} ms`
+  const pipelineLabel = loading ? 'Processing' : lastFromCache ? 'Cache hit' : 'Live inference'
 
   return (
     <>
       <InteractiveNetworkBackground />
+      <div className="ambient-shape ambient-shape-a" aria-hidden="true" />
+      <div className="ambient-shape ambient-shape-b" aria-hidden="true" />
 
       <div className="app-shell">
         <header className="hero">
-          <h1>Levee Detection Console</h1>
+          <div className="hero-topline">Hydraulic Risk Intelligence Suite</div>
+          <h1>Levee Fault Detection Console</h1>
+          <p>Enterprise-grade defect segmentation with human-in-the-loop correction for levee safety operations.</p>
+          <div className="hero-ribbon" role="note" aria-label="Platform highlights">
+            <span>Precision Segmentation</span>
+            <span>HITL Ready</span>
+            <span>Spatial Overlap Logic</span>
+            <span>Image + Video Pipeline</span>
+          </div>
+          <div className="hero-metrics">
+            <div className="hero-chip"><span>Mode</span><strong>{inputMode === 'video' ? 'Video' : 'Image'}</strong></div>
+            <div className="hero-chip"><span>Model</span><strong>{primaryModel}</strong></div>
+            <div className="hero-chip"><span>Latency</span><strong>{lastRunLabel}</strong></div>
+            <div className="hero-chip"><span>Pipeline</span><strong>{pipelineLabel}</strong></div>
+            <div className="hero-chip"><span>Runs</span><strong>{inferenceCount}</strong></div>
+          </div>
         </header>
 
         <main className="grid">
           <section className="panel controls">
             <h2>Control Center</h2>
+            <p className="panel-kicker">Tune detection, visualization, preprocessing, and execution from one command surface.</p>
 
             <div className="tab-row">
-              <button className={activeTab === 'detection' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('detection')}>Detection</button>
-              <button className={activeTab === 'visual' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('visual')}>Visual</button>
-              <button className={activeTab === 'preprocess' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('preprocess')}>Preprocess</button>
-              <button className={activeTab === 'run' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('run')}>Run</button>
+              <button className={activeTab === 'detection' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('detection')}>
+                <span className="tab-title">Detection</span>
+                <span className="tab-subtitle">Model + Thresholds</span>
+              </button>
+              <button className={activeTab === 'visual' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('visual')}>
+                <span className="tab-title">Visual</span>
+                <span className="tab-subtitle">Overlay + Boundaries</span>
+              </button>
+              <button className={activeTab === 'preprocess' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('preprocess')}>
+                <span className="tab-title">Preprocess</span>
+                <span className="tab-subtitle">Signal Enhancement</span>
+              </button>
+              <button className={activeTab === 'run' ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab('run')}>
+                <span className="tab-title">Run</span>
+                <span className="tab-subtitle">Execute Pipeline</span>
+              </button>
             </div>
 
             <div className="tab-panel">
@@ -880,23 +913,48 @@ export default function App() {
               {activeTab === 'run' && (
                 <>
                   <label>Input Type</label>
-                  <select
-                    value={inputMode}
-                    onChange={(e) => {
-                      setInputMode(e.target.value)
-                      setFile(null)
-                      setResult(null)
-                      setVideoMeta(null)
-                      setAnnotationPoints([])
-                      if (videoResultUrl) {
-                        URL.revokeObjectURL(videoResultUrl)
-                        setVideoResultUrl('')
-                      }
-                    }}
-                  >
-                    <option value="image">Image Segmentation</option>
-                    <option value="video">Video Segmentation</option>
-                  </select>
+                  <div className="mode-switch" role="radiogroup" aria-label="Input type selector">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={inputMode === 'image'}
+                      className={inputMode === 'image' ? 'mode-option active' : 'mode-option'}
+                      onClick={() => {
+                        if (inputMode === 'image') return
+                        setInputMode('image')
+                        setFile(null)
+                        setResult(null)
+                        setVideoMeta(null)
+                        setAnnotationPoints([])
+                        if (videoResultUrl) {
+                          URL.revokeObjectURL(videoResultUrl)
+                          setVideoResultUrl('')
+                        }
+                      }}
+                    >
+                      Image Segmentation
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={inputMode === 'video'}
+                      className={inputMode === 'video' ? 'mode-option active' : 'mode-option'}
+                      onClick={() => {
+                        if (inputMode === 'video') return
+                        setInputMode('video')
+                        setFile(null)
+                        setResult(null)
+                        setVideoMeta(null)
+                        setAnnotationPoints([])
+                        if (videoResultUrl) {
+                          URL.revokeObjectURL(videoResultUrl)
+                          setVideoResultUrl('')
+                        }
+                      }}
+                    >
+                      Video Segmentation
+                    </button>
+                  </div>
 
                   <label>{inputMode === 'video' ? 'Video' : 'Image'}</label>
                   <input
@@ -938,6 +996,12 @@ export default function App() {
 
           <section className="panel result">
             <h2>Detection Output</h2>
+            <p className="panel-kicker">Review segmentation render, quality metrics, and annotation history.</p>
+            <div className="result-banner">
+              <div className="result-badge"><span>Pipeline</span><strong>{pipelineLabel}</strong></div>
+              <div className="result-badge"><span>Input</span><strong>{file?.name || 'No file selected'}</strong></div>
+              <div className="result-badge"><span>Visualization</span><strong>{visualization === 'bbox' ? 'Bounding Box' : 'Overlay'}</strong></div>
+            </div>
 
             {hasOutput ? (
               <>
